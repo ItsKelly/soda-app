@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_google_auth import Authenticate
-from st_google_auth import add_auth
 from datetime import datetime
 import time
 
@@ -105,22 +104,36 @@ def set_setting(key, value):
 # -----------------------------------------------------------------------------
 # 3. AUTHENTICATION LOGIC
 # -----------------------------------------------------------------------------
-# הגדרת כותרת ועיצוב בסיסי (RTL)
+# הגדרת דף (חייב להיות בשורה הראשונה של הקוד)
 st.set_page_config(page_title="סודה אצל יואב", layout="centered")
-st.markdown("<style>body { direction: rtl; text-align: right; }</style>", unsafe_allow_html=True)
 
-# הפעלת האימות בצורה פשוטה
-add_auth()
+# יצירת מנגנון האימות - הגרסה שתואמת ל-Secrets שלך
+authenticator = Authenticate(
+    client_id=st.secrets['google_auth']['client_id'],
+    client_secret=st.secrets['google_auth']['client_secret'],
+    redirect_uri=st.secrets['google_auth']['redirect_uri'],
+    cookie_name="soda_app_cookie",
+    cookie_key=st.secrets['google_auth']['cookie_key'],
+    cookie_expiry_days=30
+)
 
-# אם המשתמש לא מחובר, האפליקציה תיעצר כאן ותציג כפתור לוגין אוטומטי
-if not st.session_state.get("authenticated"):
+# בדיקת התחברות
+authenticator.check_authenticity()
+
+if not st.session_state.get('connected'):
+    st.markdown("<div style='text-align: right;'>", unsafe_allow_html=True)
+    st.title("🥤 אפליקציית הסודה")
+    st.write("נא להתחבר כדי להמשיך:")
+    authenticator.login()
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
-# שליפת פרטי המשתמש המחובר
-user_email = st.session_state.get("email")
-user_name = st.session_state.get("username")
+# אם המשתמש מחובר, נשלוף את המייל שלו
+user_info = st.session_state.get('user_info', {})
+user_email = user_info.get('email')
+user_name = user_info.get('name')
 
-st.write(f"שלום {user_name} ({user_email})")
+st.success(f"שלום {user_name}!")
 # -----------------------------------------------------------------------------
 # 4. BUSINESS LOGIC
 # -----------------------------------------------------------------------------
@@ -350,4 +363,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
