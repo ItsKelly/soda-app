@@ -105,33 +105,32 @@ def set_setting(key, value):
 # 3. AUTHENTICATION LOGIC
 # -----------------------------------------------------------------------------
 # הגדרת דף (חייב להיות בשורה הראשונה של הקוד)
+# הגדרת דף - חייב להיות בשורה הראשונה
 st.set_page_config(page_title="סודה אצל יואב", layout="centered")
 
-# יצירת מנגנון האימות - הגרסה שתואמת ל-Secrets שלך
+# יצירת מנגנון האימות - גרסה רזה למניעת TypeError
 authenticator = Authenticate(
     client_id=st.secrets['google_auth']['client_id'],
     client_secret=st.secrets['google_auth']['client_secret'],
     redirect_uri=st.secrets['google_auth']['redirect_uri'],
-    cookie_name="soda_app_cookie",
-    cookie_key=st.secrets['google_auth']['cookie_key'],
-    cookie_expiry_days=30
+    cookie_name='soda_cookie',
+    cookie_key=st.secrets['google_auth']['cookie_key']
 )
 
 # בדיקת התחברות
 authenticator.check_authenticity()
 
+# מסך כניסה
 if not st.session_state.get('connected'):
-    st.markdown("<div style='text-align: right;'>", unsafe_allow_html=True)
     st.title("🥤 אפליקציית הסודה")
-    st.write("נא להתחבר כדי להמשיך:")
+    st.write("נא להתחבר עם חשבון גוגל:")
     authenticator.login()
-    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
-# אם המשתמש מחובר, נשלוף את המייל שלו
+# שליפת פרטים אחרי חיבור מוצלח
 user_info = st.session_state.get('user_info', {})
 user_email = user_info.get('email')
-user_name = user_info.get('name')
+user_name = user_info.get('name', 'משתמש')
 
 st.success(f"שלום {user_name}!")
 # -----------------------------------------------------------------------------
@@ -363,5 +362,6 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
