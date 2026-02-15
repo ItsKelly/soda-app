@@ -1,4 +1,4 @@
-streamlit
+streamlit==1.54.0
 st-gsheets-connection
-streamlit-google-auth
+streamlit-google-auth==1.1.1
 pandas
