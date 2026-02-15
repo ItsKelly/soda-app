@@ -5,7 +5,7 @@ from datetime import datetime
 import extra_streamlit_components as stx
 
 # --- 1. הגדרות עמוד ותמיכה בעברית (RTL) ---
-st.set_page_config(page_title="מועדון סודה - גרסה קלה", layout="centered")
+st.set_page_config(page_title="מועדון סודה PRO", layout="centered")
 
 st.markdown("""
     <style>
@@ -17,24 +17,30 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ניהול עוגיות (Login עמיד לפי שם) ---
+# --- 2. ניהול עוגיות ---
 cookie_manager = stx.CookieManager()
 
-# --- 3. חיבור וטעינת נתונים ---
+# --- 3. חיבור וטעינת נתונים הגנתית ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_all_data():
-    # יצירת מבנה ריק למניעת קריסות (KeyError)
-    empty_users = pd.DataFrame(columns=['name', 'pin', 'role'])
-    empty_trans = pd.DataFrame(columns=['timestamp', 'name', 'type', 'amount', 'status'])
+    # יצירת מבנה ברירת מחדל למניעת KeyError
+    u_cols = ['name', 'pin', 'role']
+    t_cols = ['timestamp', 'name', 'type', 'amount', 'status']
     
     try:
-        # TTL גבוה למניעת שגיאת Rate Limit (429)
-        u_df = conn.read(worksheet="Users", ttl=900).fillna("")
-        t_df = conn.read(worksheet="Transactions", ttl=900).fillna("")
-        s_df = conn.read(worksheet="Settings", ttl=900).fillna("")
-        i_df = conn.read(worksheet="Inventory", ttl=900).fillna(0)
+        # TTL גבוה של 10 דקות למניעת חסימת גוגל
+        u_df = conn.read(worksheet="Users", ttl=600).fillna("")
+        t_df = conn.read(worksheet="Transactions", ttl=600).fillna("")
+        s_df = conn.read(worksheet="Settings", ttl=600).fillna("")
+        i_df = conn.read(worksheet="Inventory", ttl=600).fillna(0)
         
+        # וידוא קיום עמודות קריטיות
+        for col in u_cols:
+            if col not in u_df.columns: u_df[col] = ""
+        for col in t_cols:
+            if col not in t_df.columns: t_df[col] = ""
+            
         if not u_df.empty:
             u_df['name'] = u_df['name'].astype(str).str.strip()
             u_df['pin'] = u_df['pin'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -43,21 +49,19 @@ def get_all_data():
             t_df['name'] = t_df['name'].astype(str).str.strip()
             t_df['amount'] = pd.to_numeric(t_df['amount'], errors='coerce').fillna(0)
             
-        # שליפת מחיר בקבוק
         price = 2.5
-        if not s_df.empty:
+        if not s_df.empty and 'key' in s_df.columns:
             p_row = s_df[s_df['key'] == 'bottle_price']
-            if not p_row.empty:
-                price = float(p_row['value'].values[0])
+            if not p_row.empty: price = float(p_row['value'].values[0])
             
         return u_df, t_df, price, i_df
     except Exception as e:
-        st.error("חל עומס זמני על השרת, המידע מוצג מהזיכרון.")
-        return empty_users, empty_trans, 2.5, pd.DataFrame()
+        st.warning("התחברות זמנית לשרת נכשלה. מציג נתונים שמורים.")
+        return pd.DataFrame(columns=u_cols), pd.DataFrame(columns=t_cols), 2.5, pd.DataFrame()
 
 users_df, trans_df, bottle_price, inv_df = get_all_data()
 
-# --- 4. לוגיקת התחברות אוטומטית (לפי שם) ---
+# --- 4. לוגיקת התחברות אוטומטית ---
 if "user" not in st.session_state:
     saved_name = cookie_manager.get(cookie="soda_user_name")
     if saved_name and not users_df.empty:
@@ -78,12 +82,11 @@ if "user" not in st.session_state:
             if not u_match.empty and str(login_pin).strip() == u_match.iloc[0]["pin"]:
                 user_data = u_match.iloc[0].to_dict()
                 st.session_state.user = user_data
-                # שמירת השם בעוגיה לשנה
                 cookie_manager.set("soda_user_name", user_data['name'], expires_at=datetime.now().replace(year=datetime.now().year + 1))
                 st.cache_data.clear()
                 st.rerun()
             else:
-                st.error("קוד שגוי.")
+                st.error("פרטים לא נכונים.")
 else:
     user = st.session_state.user
     is_admin = user.get('role') == 'admin'
@@ -94,11 +97,17 @@ else:
     with tabs[0]:
         st.title(f"שלום, {user['name']} 👋")
         
-        # חישוב יתרה וחוב
+        # חישוב חוב בטוח (הגנה מפני עמודות חסרות)
         u_t = trans_df[trans_df["name"] == user["name"]] if not trans_df.empty else pd.DataFrame()
-        purchases = u_t[u_t["type"] == "purchase"]["amount"].sum()
-        payments = u_t[(u_t["type"] == "payment") & (u_t["status"] == "completed")]["amount"].sum()
-        pending = u_t[(u_t["type"] == "payment") & (u_t["status"] == "pending")]["amount"].sum()
+        
+        purchases = 0
+        payments = 0
+        pending = 0
+        
+        if not u_t.empty and "type" in u_t.columns:
+            purchases = u_t[u_t["type"] == "purchase"]["amount"].sum()
+            payments = u_t[(u_t["type"] == "payment") & (u_t["status"] == "completed")]["amount"].sum()
+            pending = u_t[(u_t["type"] == "payment") & (u_t["status"] == "pending")]["amount"].sum()
         
         balance = purchases - payments
         
@@ -116,20 +125,20 @@ else:
             st.cache_data.clear()
             st.rerun()
         
-        with st.expander("💳 טעינת כסף (הפקדה)"):
+        with st.expander("💳 טעינת יתרה (הפקדה)"):
             with st.form("pay_f", clear_on_submit=True):
                 p_amt = st.number_input("סכום (₪)", min_value=1.0, value=10.0, step=1.0)
-                if st.form_submit_button("שלח בקשת טעינה"):
+                if st.form_submit_button("שלח בקשה"):
                     new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": user["name"], "type": "payment", "amount": p_amt, "status": "pending"}])
                     conn.update(worksheet="Transactions", data=pd.concat([trans_df, new_r], ignore_index=True))
                     st.cache_data.clear()
                     st.rerun()
 
-        st.subheader("היסטוריה אישית")
+        st.subheader("היסטוריה")
         if not u_t.empty:
             st.dataframe(u_t.sort_values("timestamp", ascending=False), use_container_width=True)
         
-        if st.button("🚪 התנתק והסר מהמכשיר"):
+        if st.button("🚪 התנתק"):
             cookie_manager.delete("soda_user_name")
             del st.session_state.user
             st.cache_data.clear()
@@ -138,9 +147,9 @@ else:
     # --- טאב ניהול ---
     if is_admin:
         with tabs[1]:
-            st.header("ניהול מועדון")
+            st.header("ניהול")
             
-            # 1. אישור הפקדות
+            # אישור הפקדות
             st.subheader("💳 הפקדות לאישור")
             pend_df = trans_df[trans_df["status"] == "pending"] if "status" in trans_df.columns else pd.DataFrame()
             if not pend_df.empty:
@@ -153,11 +162,11 @@ else:
                         st.cache_data.clear()
                         st.rerun()
             else:
-                st.write("אין הפקדות שמחכות.")
+                st.write("אין הפקדות.")
 
             st.divider()
 
-            # 2. ניהול מלאי ומחיר
+            # מלאי ומחיר
             col_m1, col_m2 = st.columns(2)
             with col_m1:
                 st.subheader("מלאי")
@@ -176,23 +185,20 @@ else:
                 st.subheader("מחיר")
                 with st.expander("עדכן מחיר"):
                     with st.form("price_form"):
-                        np = st.number_input("מחיר (₪)", value=bottle_price, step=0.5)
+                        np = st.number_input("מחיר", value=bottle_price, step=0.5)
                         if st.form_submit_button("שמור"):
-                            s_df_new = conn.read(worksheet="Settings", ttl=0)
-                            if not s_df_new[s_df_new['key'] == 'bottle_price'].empty:
-                                s_df_new.loc[s_df_new['key'] == 'bottle_price', 'value'] = np
-                            else:
-                                s_df_new = pd.concat([s_df_new, pd.DataFrame([{"key": "bottle_price", "value": np}])])
-                            conn.update(worksheet="Settings", data=s_df_new)
+                            s_new = conn.read(worksheet="Settings", ttl=0)
+                            s_new.loc[s_new['key'] == 'bottle_price', 'value'] = np
+                            conn.update(worksheet="Settings", data=s_new)
                             st.cache_data.clear()
                             st.rerun()
 
             st.divider()
 
-            # 3. הוספת משתמש
-            with st.expander("👤 הוספת חבר מועדון"):
+            # הוספת משתמש
+            with st.expander("👤 הוספת משתמש"):
                 with st.form("add_user"):
-                    n_n = st.text_input("שם מלא (ייחודי)")
+                    n_n = st.text_input("שם מלא")
                     n_p = st.text_input("קוד (4 ספרות)")
                     n_r = st.selectbox("תפקיד", ["user", "admin"])
                     if st.form_submit_button("הוסף"):
@@ -202,11 +208,13 @@ else:
                             st.cache_data.clear()
                             st.rerun()
 
-            st.subheader("טבלת חובות")
+            st.subheader("חובות")
             if not users_df.empty:
                 sums = []
                 for _, u in users_df.iterrows():
                     ut = trans_df[trans_df["name"] == u["name"]] if not trans_df.empty else pd.DataFrame()
-                    d = ut[ut["type"] == "purchase"]["amount"].sum() - ut[(ut["type"] == "payment") & (ut["status"] == "completed")]["amount"].sum()
+                    d = 0
+                    if not ut.empty and "type" in ut.columns:
+                        d = ut[ut["type"] == "purchase"]["amount"].sum() - ut[(ut["type"] == "payment") & (ut["status"] == "completed")]["amount"].sum()
                     sums.append({"שם": u["name"], "חוב": f"{d:.2f}"})
                 st.table(pd.DataFrame(sums).sort_values("חוב", ascending=False))
