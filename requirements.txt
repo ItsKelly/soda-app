@@ -1,4 +1,4 @@
 streamlit
-streamlit-gsheets
+st-gsheets-connection
 streamlit-google-auth
 pandas
