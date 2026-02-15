@@ -4,127 +4,149 @@ import pandas as pd
 from datetime import datetime
 
 # 1. הגדרות עמוד ותמיכה בעברית (RTL)
-st.set_page_config(page_title="ניהול מועדון סודה", layout="centered")
+st.set_page_config(page_title="מועדון סודה PRO", layout="centered")
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
     div[data-testid="stForm"] { direction: rtl; }
     .stButton>button { width: 100%; }
-    [data-testid="stMetricValue"] { font-size: 25px; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. חיבור לגיליון
+# 2. חיבור וטעינת נתונים
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def get_cleaned_data():
-    u_df = conn.read(worksheet="Users", ttl=0)
-    t_df = conn.read(worksheet="Transactions", ttl=0)
-    u_df = u_df.dropna(subset=['name', 'pin'])
+def get_all_data():
+    # טעינת כל הטאבים
+    u_df = conn.read(worksheet="Users", ttl=0).dropna(subset=['name', 'pin'])
+    t_df = conn.read(worksheet="Transactions", ttl=0).fillna("")
+    s_df = conn.read(worksheet="Settings", ttl=0)
+    i_df = conn.read(worksheet="Inventory", ttl=0).fillna(0)
+    
+    # ניקוי נתונים
     u_df['name'] = u_df['name'].astype(str).str.strip()
     u_df['pin'] = u_df['pin'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    return u_df, t_df
+    
+    # שליפת מחיר הבקבוק
+    try:
+        price = float(s_df[s_df['key'] == 'bottle_price']['value'].values[0])
+    except:
+        price = 2.5 # ברירת מחדל אם משהו השתבש
+        
+    return u_df, t_df, price, i_df
 
-users_df, trans_df = get_cleaned_data()
+users_df, trans_df, bottle_price, inv_df = get_all_data()
 
 # 3. מערכת הזדהות
 if "user" not in st.session_state:
-    st.header("🥤 ברוכים הבאים למועדון סודה")
-    with st.form("login_form"):
-        user_name = st.selectbox("בחר שם מהרשימה", users_df["name"].tolist())
-        user_pin = st.text_input("הקש קוד אישי (4 ספרות)", type="password")
-        submit = st.form_submit_button("כניסה")
-        if submit:
+    st.header("🥤 מועדון סודה - כניסה")
+    with st.form("login"):
+        user_name = st.selectbox("מי אתה?", users_df["name"].tolist())
+        user_pin = st.text_input("קוד אישי", type="password")
+        if st.form_submit_button("התחבר"):
             user_match = users_df[users_df["name"] == user_name]
             if not user_match.empty and str(user_pin).strip() == user_match.iloc[0]["pin"]:
                 st.session_state.user = user_match.iloc[0].to_dict()
                 st.rerun()
             else:
-                st.error("פרטים שגויים.")
+                st.error("קוד שגוי")
 else:
     user = st.session_state.user
+    is_admin = user.get('role') == 'admin'
     
-    # יצירת טאבים - רק למנהל תוצג לשונית הניהול
-    if user.get('role') == 'admin':
-        tab_personal, tab_admin = st.tabs(["👤 המועדון שלי", "🛠️ ניהול (מנהל בלבד)"])
-    else:
-        tab_personal = st.container()
-        tab_admin = None
-
-    # --- לשונית אישית ---
-    with tab_personal:
+    # יצירת טאבים
+    tabs = ["👤 המועדון שלי"]
+    if is_admin:
+        tabs.append("🛠️ ניהול מועדון")
+    
+    selected_tab = st.tabs(tabs)
+    
+    # --- טאב אישי ---
+    with selected_tab[0]:
         st.title(f"שלום, {user['name']}")
         
-        # חישוב יתרה
+        # לוגיקת חוב: קניות פחות תשלומים שסטטוס שלהם "completed" בלבד
         u_trans = trans_df[trans_df["email"] == user["email"]]
-        purchases = u_trans[u_trans["type"] == "purchase"]["amount"].sum()
-        payments = u_trans[u_trans["type"] == "payment"]["amount"].sum()
-        balance = purchases - payments
+        total_spent = u_trans[u_trans["type"] == "purchase"]["amount"].astype(float).sum()
+        total_paid = u_trans[(u_trans["type"] == "payment") & (u_trans["status"] == "completed")]["amount"].astype(float).sum()
+        pending_paid = u_trans[(u_trans["type"] == "payment") & (u_trans["status"] == "pending")]["amount"].astype(float).sum()
         
-        col1, col2 = st.columns(2)
-        col1.metric("חוב נוכחי", f"₪{balance:.2f}")
-        if col2.button("🚪 התנתק"):
+        balance = total_spent - total_paid
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("חוב לתשלום", f"₪{balance:.2f}")
+        col2.metric("מחיר בקבוק", f"₪{bottle_price}")
+        if pending_paid > 0:
+            col3.warning(f"ממתין לאישור: ₪{pending_paid}")
+
+        st.divider()
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button(f"🥤 לקחתי בקבוק"):
+                new_row = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user["email"], "type": "purchase", "amount": bottle_price, "status": "completed"}])
+                conn.update(worksheet="Transactions", data=pd.concat([trans_df, new_row], ignore_index=True))
+                st.success("לרוויה!")
+                st.rerun()
+        
+        with c2:
+            with st.popover("💰 דיווחתי על תשלום"):
+                amt = st.number_input("כמה שילמת?", min_value=1.0, step=1.0)
+                if st.button("שלח דיווח"):
+                    new_row = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user["email"], "type": "payment", "amount": amt, "status": "pending"}])
+                    conn.update(worksheet="Transactions", data=pd.concat([trans_df, new_row], ignore_index=True))
+                    st.info("הדיווח נשלח לאישור מנהל. החוב יתעדכן לאחר האישור.")
+                    st.rerun()
+
+        if st.button("🚪 התנתק"):
             del st.session_state.user
             st.rerun()
 
-        st.divider()
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🥤 לקחתי בקבוק (2.5 ₪)"):
-                new_data = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user["email"], "type": "purchase", "amount": 2.5, "status": "completed"}])
-                conn.update(worksheet="Transactions", data=pd.concat([trans_df, new_data], ignore_index=True))
-                st.success("נרשם!")
-                st.rerun()
-        with c2:
-            with st.popover("💰 דיווח תשלום"):
-                amt = st.number_input("סכום ששולם", min_value=1, step=1)
-                if st.button("שלח"):
-                    new_data = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user["email"], "type": "payment", "amount": amt, "status": "pending"}])
-                    conn.update(worksheet="Transactions", data=pd.concat([trans_df, new_data], ignore_index=True))
-                    st.info("ממתין לאישור מנהל.")
+    # --- טאב מנהל ---
+    if is_admin:
+        with selected_tab[1]:
+            st.header("ניהול")
+            
+            # א. ניהול מלאי ומחיר
+            m1, m2 = st.columns(2)
+            with m1:
+                st.subheader("עדכון מחיר")
+                new_price = st.number_input("מחיר בקבוק חדש", value=bottle_price, step=0.5)
+                if st.button("עדכן מחיר"):
+                    s_df = conn.read(worksheet="Settings", ttl=0)
+                    s_df.loc[s_df['key'] == 'bottle_price', 'value'] = new_price
+                    conn.update(worksheet="Settings", data=s_df)
+                    st.success("המחיר עודכן!")
                     st.rerun()
-
-        st.subheader("היסטוריה")
-        st.dataframe(u_trans.sort_values("timestamp", ascending=False), use_container_width=True)
-
-    # --- לשונית מנהל ---
-    if tab_admin:
-        with tab_admin:
-            st.header("ממשק מנהל")
             
-            # א. סטטיסטיקה כללית
-            total_debt = 0
-            pending_payments = trans_df[trans_df["status"] == "pending"]
-            
-            # חישוב חובות של כולם
-            all_balances = []
-            for _, u in users_df.iterrows():
-                ut = trans_df[trans_df["email"] == u["email"]]
-                bal = ut[ut["type"] == "purchase"]["amount"].sum() - ut[ut["type"] == "payment"]["amount"].sum()
-                all_balances.append({"שם": u["name"], "חוב": bal})
-                total_debt += bal
+            with m2:
+                st.subheader("מלאי")
+                total_stock = inv_df['quantity'].sum()
+                bottles_taken = len(trans_df[trans_df['type'] == 'purchase'])
+                current_stock = total_stock - bottles_taken
+                st.metric("בקבוקים במקרר", int(current_stock))
+                
+                with st.popover("➕ הוספת מלאי"):
+                    q = st.number_input("כמה בקבוקים הבאת?", min_value=1, value=24)
+                    if st.button("עדכן מלאי"):
+                        new_inv = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "quantity": q}])
+                        conn.update(worksheet="Inventory", data=pd.concat([inv_df, new_inv], ignore_index=True))
+                        st.success("המלאי עודכן!")
+                        st.rerun()
 
-            col_a, col_b = st.columns(2)
-            col_a.metric("סה\"כ חובות במועדון", f"₪{total_debt:.2f}")
-            col_b.metric("תשלומים לאישור", len(pending_payments))
+            st.divider()
 
-            # ב. אישור תשלומים
-            st.subheader("תשלומים הממתינים לאישור")
-            if not pending_payments.empty:
-                for idx, row in pending_payments.iterrows():
-                    # מציאת שם המשתמש לפי האימייל
-                    u_name = users_df[users_df["email"] == row["email"]]["name"].iloc[0]
-                    with st.expander(f"{u_name} - {row['amount']} ₪ ({row['timestamp']})"):
-                        if st.button(f"אשר תשלום של {u_name}", key=f"btn_{idx}"):
-                            # עדכון הסטטוס ב-Dataframe
-                            trans_df.at[idx, "status"] = "completed"
-                            conn.update(worksheet="Transactions", data=trans_df)
-                            st.success("עודכן!")
-                            st.rerun()
+            # ב. אישור תשלומים (החלק הקריטי)
+            st.subheader("💳 תשלומים הממתינים לאישור")
+            pending = trans_df[trans_df["status"] == "pending"]
+            if not pending.empty:
+                for idx, row in pending.iterrows():
+                    u_info = users_df[users_df["email"] == row["email"]].iloc[0]
+                    col_p1, col_p2 = st.columns([3, 1])
+                    col_p1.write(f"**{u_info['name']}** שילם **₪{row['amount']}**")
+                    if col_p2.button("אשר", key=f"app_{idx}"):
+                        trans_df.at[idx, "status"] = "completed"
+                        conn.update(worksheet="Transactions", data=trans_df)
+                        st.rerun()
             else:
                 st.write("אין תשלומים שמחכים לאישור.")
-
-            # ג. טבלת חובות כללית
-            st.subheader("מצב חובות כללי")
-            st.table(pd.DataFrame(all_balances).sort_values("חוב", ascending=False))
