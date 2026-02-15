@@ -70,5 +70,5 @@ if "user" not in st.session_state:
             if not user_match.empty and str(user_pin).strip() == user_match.iloc[0]["pin"]:
                 user_data = user_match.iloc[0].to_dict()
                 st.session_state.user = user_data
-                cookie_manager.set("soda_user_email", user_data['email'], 
-                                 expires_at=datetime
+                cookie_manager.set("soda_user_email", user_data['email'], expires_at=datetime)
+
