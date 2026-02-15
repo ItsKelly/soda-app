@@ -105,12 +105,26 @@ def set_setting(key, value):
 # 3. AUTHENTICATION LOGIC
 # -----------------------------------------------------------------------------
 authenticator = Authenticate(
-    secret_credentials_path=None, # Not used if secrets are in toml
-    cookie_name=st.secrets['auth']['cookie_name'],
     client_id=st.secrets['auth']['client_id'],
     client_secret=st.secrets['auth']['client_secret'],
     redirect_uri=st.secrets['auth']['redirect_uri'],
+    cookie_name=st.secrets['auth']['cookie_name'],
+    cookie_key=st.secrets['auth']['cookie_key'],
+    cookie_expiry_days=30
 )
+
+# בדיקה האם המשתמש מחובר
+authenticator.check_authenticity()
+
+if not st.session_state.get('connected'):
+    st.title("ברוכים הבאים לאפליקציית הסודה 🥤")
+    st.write("כדי להמשיך, יש להתחבר עם חשבון הגוגל שלך:")
+    authenticator.login()
+    st.stop()
+
+# אם הגענו לכאן, המשתמש מחובר
+user_email = st.session_state.get('user_info', {}).get('email')
+user_name = st.session_state.get('user_info', {}).get('name')
 
 # -----------------------------------------------------------------------------
 # 4. BUSINESS LOGIC
@@ -339,4 +353,5 @@ def main():
                     st.warning("כתובת אימייל לא תקינה.")
 
 if __name__ == "__main__":
+
     main()
