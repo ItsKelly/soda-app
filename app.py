@@ -1,128 +1,65 @@
 import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
-from streamlit_google_auth import Authenticate
 from datetime import datetime
-import time
 
-# -----------------------------------------------------------------------------
-# 1. CONFIGURATION (חייב להיות ראשון ורק פעם אחת!)
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="ניהול סודה", page_icon="🥤", layout="wide")
+# הגדרות דף
+st.set_page_config(page_title="מועדון הסודה", layout="centered")
+st.markdown("<style>.stApp { direction: rtl; text-align: right; }</style>", unsafe_allow_html=True)
 
-# עיצוב RTL
-st.markdown("""<style>.stApp { direction: rtl; } h1,h2,h3,p,div { text-align: right; }</style>""", unsafe_allow_html=True)
+# חיבור לגיליון
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# קבועים
-MASTER_ADMIN = "kaliyoav@gmail.com"
-SHEET_TRANSACTIONS = "Transactions"
-SHEET_SETTINGS = "Settings"
-SHEET_ADMINS = "Admins"
-SHEET_INVENTORY = "Inventory"
+def get_data(sheet):
+    return conn.read(worksheet=sheet, ttl=0)
 
-# -----------------------------------------------------------------------------
-# 2. AUTHENTICATION (תיקון ה-TypeError המוחלט)
-# -----------------------------------------------------------------------------
-# יצירת מבנה ה-JSON שהספרייה מצפה לו
-credentials = {
-    "web": {
-        "client_id": st.secrets['google_auth']['client_id'],
-        "client_secret": st.secrets['google_auth']['client_secret'],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": [st.secrets['google_auth']['redirect_uri']]
-    }
-}
+# 1. מסך כניסה (Login פשוט עם PIN)
+st.title("🥤 מועדון הסודה המשרדי")
 
-# הפעלת ה-Authenticator עם המבנה הנכון
-authenticator = Authenticate(
-    secret_credentials_path=credentials,
-    cookie_name='soda_cookie',
-    cookie_key=st.secrets['google_auth']['cookie_key'],
-    cookie_expiry_days=30,
-    redirect_uri=st.secrets['google_auth']['redirect_uri']
-)
+users_df = get_data("Users")
+user_names = users_df["name"].tolist()
 
-# בדיקה אם המשתמש מחובר
-authenticator.check_authenticity()
+selected_name = st.selectbox("מי אתה?", ["בחר שם..."] + user_names)
 
-if not st.session_state.get('connected'):
-    st.title("🥤 אפליקציית הסודה")
-    st.write("נא להתחבר עם גוגל:")
-    authenticator.login()
-    st.stop()
-
-# שליפת פרטי משתמש
-user_info = st.session_state.get('user_info', {})
-user_email = user_info.get('email')
-user_name = user_info.get('name', 'משתמש')
-
-# -----------------------------------------------------------------------------
-# 3. DATABASE HELPERS
-# -----------------------------------------------------------------------------
-def get_connection():
-    return st.connection("gsheets", type=GSheetsConnection)
-
-def fetch_data(worksheet_name, required_columns):
-    conn = get_connection()
-    try:
-        df = conn.read(worksheet=worksheet_name, ttl=0)
-        for col in required_columns:
-            if col not in df.columns: df[col] = None
-        return df
-    except:
-        return pd.DataFrame(columns=required_columns)
-
-def append_row(worksheet_name, new_row_dict, required_columns):
-    conn = get_connection()
-    df = fetch_data(worksheet_name, required_columns)
-    updated_df = pd.concat([df, pd.DataFrame([new_row_dict])], ignore_index=True)
-    conn.update(worksheet=worksheet_name, data=updated_df)
-    st.cache_data.clear()
-
-def get_setting(key, default_val):
-    df = fetch_data(SHEET_SETTINGS, ["key", "value"])
-    if not df.empty and key in df["key"].values:
-        return float(df[df["key"] == key].iloc[0]["value"])
-    return float(default_val)
-
-# -----------------------------------------------------------------------------
-# 4. MAIN UI
-# -----------------------------------------------------------------------------
-def main():
-    st.header(f"שלום, {user_name} 👋")
+if selected_name != "בחר שם...":
+    user_row = users_df[users_df["name"] == selected_name].iloc[0]
+    user_pin = str(user_row["pin"])
+    user_email = user_row["email"]
     
-    current_price = get_setting("price_per_bottle", 5.0)
-
-    # חישוב חוב
-    df_trans = fetch_data(SHEET_TRANSACTIONS, ["email", "type", "amount", "status"])
-    user_df = df_trans[df_trans["email"] == user_email]
-    bottles = len(user_df[user_df["type"] == "Drink"])
-    paid = pd.to_numeric(user_df[(user_df["type"] == "Payment") & (user_df["status"] == "Confirmed")]["amount"], errors='coerce').sum()
+    input_pin = st.text_input("הכנס קוד אישי (PIN)", type="password")
     
-    # חישוב מתמטי פשוט ב-LaTeX לתצוגה יפה (אופציונלי)
-    debt = (bottles * current_price) - paid
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("חוב נוכחי", f"₪ {debt:.2f}")
+    if input_pin == user_pin:
+        st.success(f"שלום {selected_name}, זוהית בהצלחה!")
+        
+        # --- כאן מגיע התוכן של האפליקציה ---
+        
+        # שליפת מחיר מהגדרות
+        settings_df = get_data("Settings")
+        price = float(settings_df[settings_df["key"] == "price_per_bottle"].iloc[0]["value"])
+        
+        # חישוב חוב (ספירת שורות ב-Transactions)
+        trans_df = get_data("Transactions")
+        user_trans = trans_df[trans_df["email"] == user_email]
+        drinks = len(user_trans[user_trans["type"] == "Drink"])
+        paid = pd.to_numeric(user_trans[(user_trans["type"] == "Payment") & (user_trans["status"] == "Confirmed")]["amount"], errors='coerce').sum()
+        debt = (drinks * price) - paid
+        
+        st.metric("החוב שלך", f"₪ {debt:.2f}")
+        
         if st.button("🥤 לקחתי בקבוק סודה", type="primary"):
-            row = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user_email, "name": user_name, "type": "Drink", "amount": 1, "status": "Confirmed"}
-            append_row(SHEET_TRANSACTIONS, row, ["timestamp", "email", "name", "type", "amount", "status"])
-            st.toast("נרשם! לרוויה")
-            time.sleep(1)
+            new_row = pd.DataFrame([{
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "email": user_email,
+                "name": selected_name,
+                "type": "Drink",
+                "amount": 1,
+                "status": "Confirmed"
+            }])
+            updated_df = pd.concat([trans_df, new_row], ignore_index=True)
+            conn.update(worksheet="Transactions", data=updated_df)
+            st.balloons()
+            st.toast("נרשם בהצלחה!")
             st.rerun()
-
-    with col2:
-        with st.form("pay_form"):
-            amt = st.number_input("דיווח על תשלום (₪)", min_value=1.0)
-            if st.form_submit_button("שלח דיווח"):
-                row = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user_email, "name": user_name, "type": "Payment", "amount": amt, "status": "Pending"}
-                append_row(SHEET_TRANSACTIONS, row, ["timestamp", "email", "name", "type", "amount", "status"])
-                st.success("דיווח נשלח לאישור")
-
-    if st.sidebar.button("התנתק"):
-        authenticator.logout()
-
-if __name__ == "__main__":
-    main()
+            
+    elif input_pin != "":
+        st.error("קוד שגוי, נסה שוב.")
