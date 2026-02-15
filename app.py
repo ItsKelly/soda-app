@@ -16,9 +16,12 @@ except Exception as e:
 
 def get_data(sheet_name):
     try:
+        # שורה חדשה לבדיקה:
+        st.write("טאבים שמצאתי בגיליון:", conn.list_worksheets()) 
+        
         return conn.read(worksheet=sheet_name, ttl=0)
     except Exception as e:
-        st.error(f"לא מצליח למצוא את הטאב '{sheet_name}' בגיליון.")
+        st.error(f"לא מצליח למצוא את הטאב '{sheet_name}'.")
         return pd.DataFrame()
 
 st.title("🥤 מועדון הסודה")
@@ -65,3 +68,4 @@ if not users_df.empty:
             st.error("קוד שגוי")
 else:
     st.warning("טוען נתונים... וודא שיש טאב בשם 'Users' בגיליון שלך.")
+
