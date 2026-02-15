@@ -18,10 +18,10 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_all_data():
     # טעינת כל הטאבים
-    u_df = conn.read(worksheet="Users", ttl=0).dropna(subset=['name', 'pin'])
-    t_df = conn.read(worksheet="Transactions", ttl=0).fillna("")
-    s_df = conn.read(worksheet="Settings", ttl=0)
-    i_df = conn.read(worksheet="Inventory", ttl=0).fillna(0)
+    u_df = conn.read(worksheet="Users", ttl=10s).dropna(subset=['name', 'pin'])
+    t_df = conn.read(worksheet="Transactions", ttl=10s).fillna("")
+    s_df = conn.read(worksheet="Settings", ttl=10s)
+    i_df = conn.read(worksheet="Inventory", ttl=10s).fillna(0)
     
     # ניקוי נתונים
     u_df['name'] = u_df['name'].astype(str).str.strip()
@@ -150,3 +150,4 @@ else:
                         st.rerun()
             else:
                 st.write("אין תשלומים שמחכים לאישור.")
+
