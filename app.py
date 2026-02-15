@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_google_auth import Authenticate
+from st_google_auth import add_auth
 from datetime import datetime
 import time
 
@@ -104,28 +105,22 @@ def set_setting(key, value):
 # -----------------------------------------------------------------------------
 # 3. AUTHENTICATION LOGIC
 # -----------------------------------------------------------------------------
-authenticator = Authenticate(
-    client_id=st.secrets['auth']['client_id'],
-    client_secret=st.secrets['auth']['client_secret'],
-    redirect_uri=st.secrets['auth']['redirect_uri'],
-    cookie_name=st.secrets['auth']['cookie_name'],
-    cookie_key=st.secrets['auth']['cookie_key'],
-    cookie_expiry_days=30
-)
+# הגדרת כותרת ועיצוב בסיסי (RTL)
+st.set_page_config(page_title="סודה אצל יואב", layout="centered")
+st.markdown("<style>body { direction: rtl; text-align: right; }</style>", unsafe_allow_html=True)
 
-# בדיקה האם המשתמש מחובר
-authenticator.check_authenticity()
+# הפעלת האימות בצורה פשוטה
+add_auth()
 
-if not st.session_state.get('connected'):
-    st.title("ברוכים הבאים לאפליקציית הסודה 🥤")
-    st.write("כדי להמשיך, יש להתחבר עם חשבון הגוגל שלך:")
-    authenticator.login()
+# אם המשתמש לא מחובר, האפליקציה תיעצר כאן ותציג כפתור לוגין אוטומטי
+if not st.session_state.get("authenticated"):
     st.stop()
 
-# אם הגענו לכאן, המשתמש מחובר
-user_email = st.session_state.get('user_info', {}).get('email')
-user_name = st.session_state.get('user_info', {}).get('name')
+# שליפת פרטי המשתמש המחובר
+user_email = st.session_state.get("email")
+user_name = st.session_state.get("username")
 
+st.write(f"שלום {user_name} ({user_email})")
 # -----------------------------------------------------------------------------
 # 4. BUSINESS LOGIC
 # -----------------------------------------------------------------------------
@@ -355,3 +350,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
