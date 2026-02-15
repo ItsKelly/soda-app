@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURATION (חייב להיות ראשון!)
+# 1. CONFIGURATION (חובה בשורה הראשונה!)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="ניהול סודה", page_icon="🥤", layout="wide")
 
@@ -21,18 +21,19 @@ SHEET_ADMINS = "Admins"
 SHEET_INVENTORY = "Inventory"
 
 # -----------------------------------------------------------------------------
-# 2. AUTHENTICATION (גרסה חסינת טעויות)
+# 2. AUTHENTICATION (תיקון ה-TypeError)
 # -----------------------------------------------------------------------------
+# שינינו את cookie_key ל-key כפי שהספרייה דורשת
 authenticator = Authenticate(
+    cookie_name='soda_cookie',
+    key=st.secrets['google_auth']['cookie_key'], 
+    cookie_expiry_days=30,
     client_id=st.secrets['google_auth']['client_id'],
     client_secret=st.secrets['google_auth']['client_secret'],
-    redirect_uri=st.secrets['google_auth']['redirect_uri'],
-    cookie_name='soda_cookie',
-    cookie_key=st.secrets['google_auth']['cookie_key'],
-    cookie_expiry_days=30
+    redirect_uri=st.secrets['google_auth']['redirect_uri']
 )
 
-# בדיקה אם המשתמש מחובר (מריץ לוגין אם לא)
+# בדיקה אם המשתמש מחובר
 authenticator.check_authenticity()
 
 if not st.session_state.get('connected'):
@@ -41,7 +42,7 @@ if not st.session_state.get('connected'):
     authenticator.login()
     st.stop()
 
-# פרטי משתמש
+# שליפת פרטי משתמש
 user_info = st.session_state.get('user_info', {})
 user_email = user_info.get('email')
 user_name = user_info.get('name', 'משתמש')
@@ -69,11 +70,6 @@ def append_row(worksheet_name, new_row_dict, required_columns):
     conn.update(worksheet=worksheet_name, data=updated_df)
     st.cache_data.clear()
 
-def update_full_dataframe(worksheet_name, df):
-    conn = get_connection()
-    conn.update(worksheet=worksheet_name, data=df)
-    st.cache_data.clear()
-
 def get_setting(key, default_val):
     df = fetch_data(SHEET_SETTINGS, ["key", "value"])
     if not df.empty and key in df["key"].values:
@@ -84,35 +80,35 @@ def get_setting(key, default_val):
 # 4. MAIN UI
 # -----------------------------------------------------------------------------
 def main():
-    st.title(f"שלום, {user_name}")
+    st.header(f"שלום, {user_name} 👋")
     
     current_price = get_setting("price_per_bottle", 5.0)
 
-    # חישוב חוב
+    # חישוב חוב (לפי הנתונים בגיליון)
     df_trans = fetch_data(SHEET_TRANSACTIONS, ["email", "type", "amount", "status"])
     user_df = df_trans[df_trans["email"] == user_email]
     bottles = len(user_df[user_df["type"] == "Drink"])
     paid = pd.to_numeric(user_df[(user_df["type"] == "Payment") & (user_df["status"] == "Confirmed")]["amount"], errors='coerce').sum()
     debt = (bottles * current_price) - paid
 
-    # תצוגה
     col1, col2 = st.columns(2)
     with col1:
         st.metric("חוב נוכחי", f"₪ {debt:.2f}")
         if st.button("🥤 לקחתי בקבוק סודה", type="primary"):
             row = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user_email, "name": user_name, "type": "Drink", "amount": 1, "status": "Confirmed"}
             append_row(SHEET_TRANSACTIONS, row, ["timestamp", "email", "name", "type", "amount", "status"])
+            st.toast("נרשם! לרוויה 🥤")
+            time.sleep(1)
             st.rerun()
 
     with col2:
-        with st.form("pay"):
-            amt = st.number_input("דיווח תשלום (₪)", min_value=1.0)
-            if st.form_submit_button("שלח דיווח"):
+        with st.form("pay_form"):
+            amt = st.number_input("דיווח על תשלום (₪)", min_value=1.0)
+            if st.form_submit_button("שלח דיווח מנהל"):
                 row = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "email": user_email, "name": user_name, "type": "Payment", "amount": amt, "status": "Pending"}
                 append_row(SHEET_TRANSACTIONS, row, ["timestamp", "email", "name", "type", "amount", "status"])
-                st.success("דיווח נשלח!")
+                st.success("דיווח נשלח לאישור מנהל!")
 
-    # כפתור התנתקות בסיידבר
     if st.sidebar.button("התנתק"):
         authenticator.logout()
 
