@@ -12,7 +12,6 @@ st.markdown("""
     .stApp { direction: rtl; text-align: right; }
     div[data-testid="stForm"] { direction: rtl; }
     .stTabs [data-baseweb="tab-list"] { direction: rtl; justify-content: center; }
-    /* מרכז כותרות וטקסט מסוים */
     .centered-text { text-align: center; width: 100%; }
     .balance-box {
         padding: 20px;
@@ -44,17 +43,18 @@ def get_all_data():
         if not u_df.empty:
             u_df['name'] = u_df['name'].astype(str).str.strip()
             u_df['pin'] = u_df['pin'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-        
-        price = 2.5
-        if not s_df.empty and 'key' in s_df.columns:
-            p_row = s_df[s_df['key'] == 'bottle_price']
-            if not p_row.empty: price = float(p_row['value'].values[0])
             
-        return u_df, t_df, price, i_df
+        return u_df, t_df, s_df, i_df
     except:
-        return pd.DataFrame(columns=u_cols), pd.DataFrame(columns=t_cols), 2.5, pd.DataFrame()
+        return pd.DataFrame(columns=u_cols), pd.DataFrame(columns=t_cols), pd.DataFrame(), pd.DataFrame()
 
-users_df, trans_df, bottle_price, inv_df = get_all_data()
+users_df, trans_df, settings_df, inv_df = get_all_data()
+
+# שליפת מחיר בקבוק
+bottle_price = 2.5
+if not settings_df.empty and 'key' in settings_df.columns:
+    p_row = settings_df[settings_df['key'] == 'bottle_price']
+    if not p_row.empty: bottle_price = float(p_row['value'].values[0])
 
 # --- 3. לוגיקת יתרה ועדכון ---
 def calculate_balance(name, df):
@@ -110,14 +110,13 @@ if "user" not in st.session_state:
 else:
     user = st.session_state.user
     is_admin = user.get('role') == 'admin'
+    # הוספת key="main_tabs" מבטיחה שהמשתמש יישאר בטאב הנוכחי אחרי ריענון
     tabs = st.tabs(["👤 החשבון שלי", "🛠️ ניהול"]) if is_admin else [st.container()]
 
     with tabs[0]:
         st.markdown(f"<h2 class='centered-text'>שלום, {user['name']}</h2>", unsafe_allow_html=True)
         
         balance, pending = calculate_balance(user['name'], trans_df)
-        
-        # תצוגת יתרה צבעונית ומיושרת
         color = "#28a745" if balance >= 0 else "#dc3545"
         st.markdown(f"""
             <div class="balance-box" style="color: {color}; border: 2px solid {color};">
@@ -131,18 +130,17 @@ else:
 
         st.divider()
 
-        # קנייה מרובה - מיושר
         with st.expander("🥤 רכישת סודה", expanded=True):
             cq1, cq2 = st.columns([1, 2])
-            qty = cq1.number_input("כמות", min_value=1, value=1)
+            qty = cq1.number_input("כמות", min_value=1, value=1, step=1)
             if cq2.button(f"אשר רכישה (₪{qty*bottle_price:.2f})", type="primary", use_container_width=True):
                 new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": user["name"], "type": "purchase", "amount": qty*bottle_price, "status": "completed", "notes": ""}])
                 if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
         
-        # הפקדה - מיושר
         with st.expander("💳 הפקדת כסף"):
             with st.form("pay_f", clear_on_submit=True):
-                p_amt = st.number_input("סכום להפקדה (₪)", min_value=1.0, value=20.0)
+                # step=1.0 גורם לכפתורים להוסיף/להוריד שקלים שלמים
+                p_amt = st.number_input("סכום להפקדה (₪)", min_value=1.0, value=20.0, step=1.0)
                 if st.form_submit_button("שלח בקשה", use_container_width=True):
                     new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": user["name"], "type": "payment", "amount": p_amt, "status": "pending", "notes": ""}])
                     if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
@@ -155,10 +153,10 @@ else:
             st.rerun()
 
     if is_admin:
+        # כאן הוספנו את המפתח לטאב הניהול
         with tabs[1]:
             st.markdown("<h2 class='centered-text'>ניהול המועדון</h2>", unsafe_allow_html=True)
             
-            # אישור הפקדות
             st.subheader("💳 אישור הפקדות")
             p_df = trans_df[trans_df["status"] == "pending"]
             if not p_df.empty:
@@ -172,14 +170,14 @@ else:
 
             st.divider()
 
-            # מלאי ומחיר - סימטרי
             col_a, col_b = st.columns(2)
             with col_a:
                 st.subheader("📦 מלאי")
                 stock = inv_df['quantity'].sum() - len(trans_df[trans_df['type'] == 'purchase'])
                 st.metric("במקרר", int(stock))
                 with st.popover("עדכן מלאי", use_container_width=True):
-                    qc = st.number_input("שינוי (+/-)", value=0)
+                    # step=1 למלאי בקבוקים
+                    qc = st.number_input("שינוי (+/-)", value=0, step=1)
                     if st.button("בצע עדכון", use_container_width=True):
                         new_i = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "quantity": qc}])
                         if safe_update("Inventory", pd.concat([inv_df, new_i], ignore_index=True)): st.rerun()
@@ -188,7 +186,8 @@ else:
                 st.subheader("💰 הגדרות")
                 st.metric("מחיר נוכחי", f"₪{bottle_price}")
                 with st.popover("שנה מחיר", use_container_width=True):
-                    np = st.number_input("מחיר חדש", value=bottle_price)
+                    # מחיר יכול להשתנות ב-0.5 ש"ח (אופציונלי, אפשר לשנות ל-1.0)
+                    np = st.number_input("מחיר חדש", value=bottle_price, step=0.5)
                     if st.button("שמור", use_container_width=True):
                         s_new = conn.read(worksheet="Settings", ttl=0)
                         s_new.loc[s_new['key'] == 'bottle_price', 'value'] = np
@@ -196,19 +195,17 @@ else:
 
             st.divider()
 
-            # עדכון יתרה ידני
             with st.expander("🔄 עדכון יתרה ידני למשתמש"):
                 with st.form("adj_f"):
                     t_user = st.selectbox("בחר משתמש", users_df["name"].tolist())
-                    t_amt = st.number_input("סכום לשינוי (חיובי מוסיף יתרה, שלילי מוריד)", value=0.0)
+                    # step=1.0 לשינוי יתרה בשקלים
+                    t_amt = st.number_input("סכום לשינוי (₪)", value=0.0, step=1.0)
                     t_note = st.text_input("סיבה")
-                    # חשוב: כאן אנחנו הופכים את הסימן כי בטרנזקציות adjustment חיובי אצלנו נחשב חוב
                     if st.form_submit_button("בצע עדכון", use_container_width=True):
                         if t_amt != 0:
                             new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": t_user, "type": "adjustment", "amount": -t_amt, "status": "completed", "notes": t_note}])
                             if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
 
-            # טבלת יתרות - מיושרת וסימטרית
             st.subheader("📊 טבלת יתרות כללית")
             if not users_df.empty:
                 sums = []
