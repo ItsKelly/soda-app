@@ -1,11 +1,11 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+from supabase import create_client, Client
 import pandas as pd
 from datetime import datetime
 import extra_streamlit_components as stx
 
-# --- 1. הגדרות עמוד ויישור לימין (RTL) ---
-st.set_page_config(page_title="מועדון סודה", layout="centered", page_icon="🥤")
+# --- 1. הגדרות עמוד ועיצוב (RTL + Mobile Friendly) ---
+st.set_page_config(page_title="מועדון סודה PRO", layout="centered", page_icon="🥤")
 
 st.markdown("""
     <style>
@@ -15,48 +15,56 @@ st.markdown("""
     .centered-text { text-align: center; width: 100%; }
     .balance-box {
         padding: 20px;
-        border-radius: 10px;
+        border-radius: 12px;
         text-align: center;
         font-weight: bold;
-        font-size: 26px;
+        font-size: 28px;
         margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
+    /* שיפור נראות כפתורים במובייל */
+    .stButton>button { width: 100%; border-radius: 10px; height: 3em; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ניהול עוגיות וחיבור נתונים ---
+# --- 2. חיבור ל-Supabase וניהול עוגיות ---
+@st.cache_resource
+def init_supabase() -> Client:
+    # ודא שהגדרת SUPABASE_URL ו-SUPABASE_KEY ב-Secrets של Streamlit
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_supabase()
 cookie_manager = stx.CookieManager()
-conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- 3. פונקציות שליפה וחישוב נתונים ---
 def get_all_data():
-    u_cols, t_cols = ['name', 'pin', 'role'], ['timestamp', 'name', 'type', 'amount', 'status', 'notes']
     try:
-        u_df = conn.read(worksheet="Users", ttl=600).fillna("")
-        t_df = conn.read(worksheet="Transactions", ttl=600).fillna("")
-        s_df = conn.read(worksheet="Settings", ttl=600).fillna("")
-        i_df = conn.read(worksheet="Inventory", ttl=600).fillna(0)
+        # שליפת נתונים מהטבלאות ב-Supabase
+        users = supabase.table("users").select("*").execute().data
+        trans = supabase.table("transactions").select("*").order("timestamp", desc=True).execute().data
+        inv = supabase.table("inventory").select("*").execute().data
+        settings = supabase.table("settings").select("*").execute().data
         
-        for df, cols in [(u_df, u_cols), (t_df, t_cols)]:
-            for col in cols:
-                if col not in df.columns: df[col] = ""
+        u_df = pd.DataFrame(users) if users else pd.DataFrame(columns=['name', 'pin', 'role'])
+        t_df = pd.DataFrame(trans) if trans else pd.DataFrame(columns=['timestamp', 'name', 'type', 'amount', 'status', 'notes'])
+        i_df = pd.DataFrame(inv) if inv else pd.DataFrame(columns=['timestamp', 'quantity'])
         
-        if not u_df.empty:
-            u_df['name'] = u_df['name'].astype(str).str.strip()
-            u_df['pin'] = u_df['pin'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-            
-        return u_df, t_df, s_df, i_df
-    except:
-        return pd.DataFrame(columns=u_cols), pd.DataFrame(columns=t_cols), pd.DataFrame(), pd.DataFrame()
+        # שליפת מחיר בקבוק מהגדרות
+        price = 2.5
+        if settings:
+            for s in settings:
+                if s['key'] == 'bottle_price':
+                    price = float(s['value'])
+                    
+        return u_df, t_df, price, i_df
+    except Exception as e:
+        st.error(f"שגיאה בטעינת נתונים מ-Supabase: {e}")
+        return pd.DataFrame(), pd.DataFrame(), 2.5, pd.DataFrame()
 
-users_df, trans_df, settings_df, inv_df = get_all_data()
+users_df, trans_df, bottle_price, inv_df = get_all_data()
 
-# שליפת מחיר בקבוק
-bottle_price = 2.5
-if not settings_df.empty and 'key' in settings_df.columns:
-    p_row = settings_df[settings_df['key'] == 'bottle_price']
-    if not p_row.empty: bottle_price = float(p_row['value'].values[0])
-
-# --- 3. לוגיקת יתרה ועדכון ---
 def calculate_balance(name, df):
     if df.empty or name not in df['name'].values: return 0.0, 0.0
     u_t = df[df["name"] == name]
@@ -67,37 +75,50 @@ def calculate_balance(name, df):
     # יתרה = הפקדות - (קניות + התאמות)
     return (payments - (purchases + adjustments)), pending
 
-def safe_update(ws, data):
-    try:
-        conn.update(worksheet=ws, data=data)
-        st.cache_data.clear()
-        return True
-    except:
-        st.error("שגיאת גוגל. נסה שוב בעוד דקה.")
-        return False
+# --- 4. פונקציות עדכון (Inserts / Updates) ---
+def db_add_transaction(name, t_type, amount, status="completed", notes=""):
+    data = {
+        "name": name, "type": t_type, "amount": amount, 
+        "status": status, "notes": notes, 
+        "timestamp": datetime.now().isoformat()
+    }
+    supabase.table("transactions").insert(data).execute()
+    st.cache_data.clear()
+    st.rerun()
 
-# --- 4. כניסה / יציאה ---
+def db_update_inventory(qty_change):
+    data = {"quantity": qty_change, "timestamp": datetime.now().isoformat()}
+    supabase.table("inventory").insert(data).execute()
+    st.cache_data.clear()
+    st.rerun()
+
+def db_update_price(new_price):
+    supabase.table("settings").update({"value": new_price}).eq("key", "bottle_price").execute()
+    st.cache_data.clear()
+    st.rerun()
+
+# --- 5. לוגיקת התחברות ---
 if "logout_in_progress" not in st.session_state:
     st.session_state.logout_in_progress = False
 
 if "user" not in st.session_state and not st.session_state.logout_in_progress:
     saved_name = cookie_manager.get(cookie="soda_user_name")
     if saved_name and not users_df.empty:
-        user_match = users_df[users_df["name"] == saved_name]
-        if not user_match.empty:
-            st.session_state.user = user_match.iloc[0].to_dict()
+        u_match = users_df[users_df["name"] == saved_name]
+        if not u_match.empty:
+            st.session_state.user = u_match.iloc[0].to_dict()
             st.rerun()
 
-# --- 5. ממשק המשתמש ---
+# --- 6. ממשק המשתמש ---
 if "user" not in st.session_state:
     st.markdown("<h1 class='centered-text'>🥤 מועדון סודה</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         with st.form("login_form"):
             u_list = users_df["name"].tolist() if not users_df.empty else []
-            login_name = st.selectbox("מי אתה?", u_list, index=None, placeholder="בחר שם...")
-            login_pin = st.text_input("קוד אישי", type="password")
-            if st.form_submit_button("כניסה", use_container_width=True):
+            login_name = st.selectbox("מי מגיע לשתות?", u_list, index=None, placeholder="בחר שם...")
+            login_pin = st.text_input("קוד אישי (PIN)", type="password")
+            if st.form_submit_button("כניסה למערכת", use_container_width=True):
                 if login_name:
                     u_match = users_df[users_df["name"] == login_name]
                     if not u_match.empty and str(login_pin).strip() == u_match.iloc[0]["pin"]:
@@ -107,21 +128,21 @@ if "user" not in st.session_state:
                         st.cache_data.clear()
                         st.rerun()
                     else: st.error("קוד שגוי.")
-
 else:
-    user = st.session_state.user
-    is_admin = user.get('role') == 'admin'
-    # שימוש בטאבים עם מפתח קבוע למניעת קפיצות
+    curr_user = st.session_state.user
+    is_admin = curr_user.get('role') == 'admin'
+    
+    # טאבים עם זיכרון
     tabs = st.tabs(["👤 החשבון שלי", "🛠️ ניהול"]) if is_admin else [st.container()]
 
     with tabs[0]:
-        st.markdown(f"<h2 class='centered-text'>שלום, {user['name']}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='centered-text'>אהלן, {curr_user['name']}</h2>", unsafe_allow_html=True)
         
-        balance, pending = calculate_balance(user['name'], trans_df)
-        color = "#28a745" if balance >= 0 else "#dc3545" # ירוק לפלוס, אדום למינוס
+        balance, pending = calculate_balance(curr_user['name'], trans_df)
+        color = "#28a745" if balance >= 0 else "#dc3545"
         
         st.markdown(f"""
-            <div class="balance-box" style="color: {color}; border: 2px solid {color};">
+            <div class="balance-box" style="color: {color}; border: 2px solid {color}; background-color: {color}10;">
                 יתרה בחשבון: ₪{balance:.2f}
             </div>
             """, unsafe_allow_html=True)
@@ -132,21 +153,21 @@ else:
 
         st.divider()
 
+        # קנייה מרובה
         with st.expander("🥤 רכישת סודה", expanded=True):
             cq1, cq2 = st.columns([1, 2])
             qty = cq1.number_input("כמות", min_value=1, value=1, step=1)
-            if cq2.button(f"אשר רכישה (₪{qty*bottle_price:.2f})", type="primary", use_container_width=True):
-                new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": user["name"], "type": "purchase", "amount": qty*bottle_price, "status": "completed", "notes": ""}])
-                if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
+            if cq2.button(f"אשר רכישה (₪{qty*bottle_price:.2f})", type="primary"):
+                db_add_transaction(curr_user['name'], "purchase", qty*bottle_price)
         
+        # הפקדה
         with st.expander("💳 הפקדת כסף"):
             with st.form("pay_f", clear_on_submit=True):
                 p_amt = st.number_input("סכום להפקדה (₪)", min_value=1.0, value=20.0, step=1.0)
-                if st.form_submit_button("שלח בקשה למנהל", use_container_width=True):
-                    new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": user["name"], "type": "payment", "amount": p_amt, "status": "pending", "notes": ""}])
-                    if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
+                if st.form_submit_button("שלח בקשה למנהל"):
+                    db_add_transaction(curr_user['name'], "payment", p_amt, status="pending")
 
-        if st.button("🚪 התנתק מהמכשיר", use_container_width=True):
+        if st.button("🚪 התנתקות"):
             cookie_manager.delete("soda_user_name")
             st.session_state.logout_in_progress = True
             if "user" in st.session_state: del st.session_state.user
@@ -155,59 +176,58 @@ else:
 
     if is_admin:
         with tabs[1]:
-            st.markdown("<h2 class='centered-text'>ניהול המועדון</h2>", unsafe_allow_html=True)
+            st.markdown("<h2 class='centered-text'>ניהול מערכת</h2>", unsafe_allow_html=True)
             
+            # 1. אישור הפקדות
             st.subheader("💳 אישור הפקדות")
-            p_df = trans_df[trans_df["status"] == "pending"]
+            p_df = trans_df[trans_df["status"] == "pending"] if not trans_df.empty else pd.DataFrame()
             if not p_df.empty:
                 for idx, row in p_df.iterrows():
                     ca, cb = st.columns([3, 1])
                     ca.write(f"**{row['name']}**: הפקיד ₪{row['amount']}")
-                    if cb.button("אשר", key=f"ap_{idx}", use_container_width=True):
-                        trans_df.at[idx, "status"] = "completed"
-                        if safe_update("Transactions", trans_df): st.rerun()
+                    if cb.button("אשר ✅", key=f"ap_{row['id']}"):
+                        supabase.table("transactions").update({"status": "completed"}).eq("id", row['id']).execute()
+                        st.cache_data.clear()
+                        st.rerun()
             else: st.info("אין הפקדות ממתינות.")
 
             st.divider()
 
+            # 2. מלאי ומחיר
             col_a, col_b = st.columns(2)
             with col_a:
                 st.subheader("📦 מלאי")
-                stock = inv_df['quantity'].sum() - len(trans_df[trans_df['type'] == 'purchase'])
+                bottles_taken = len(trans_df[trans_df['type'] == 'purchase']) if not trans_df.empty else 0
+                stock = inv_df['quantity'].sum() - bottles_taken if not inv_df.empty else 0
                 st.metric("במקרר", int(stock))
                 with st.popover("עדכן מלאי", use_container_width=True):
                     qc = st.number_input("שינוי (+/-)", value=0, step=1)
-                    if st.button("בצע עדכון", use_container_width=True):
-                        new_i = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "quantity": qc}])
-                        if safe_update("Inventory", pd.concat([inv_df, new_i], ignore_index=True)): st.rerun()
+                    if st.button("בצע עדכון"): db_update_inventory(qc)
             
             with col_b:
                 st.subheader("💰 הגדרות")
                 st.metric("מחיר נוכחי", f"₪{bottle_price}")
                 with st.popover("שנה מחיר", use_container_width=True):
                     np = st.number_input("מחיר חדש", value=bottle_price, step=0.5)
-                    if st.button("שמור", use_container_width=True):
-                        s_new = conn.read(worksheet="Settings", ttl=0)
-                        s_new.loc[s_new['key'] == 'bottle_price', 'value'] = np
-                        if safe_update("Settings", s_new): st.rerun()
+                    if st.button("שמור"): db_update_price(np)
 
             st.divider()
 
+            # 3. עדכון יתרה ידני
             with st.expander("🔄 עדכון יתרה ידני"):
                 with st.form("adj_f"):
                     t_user = st.selectbox("בחר משתמש", users_df["name"].tolist())
-                    t_amt = st.number_input("סכום לשינוי (₪)", value=0.0, step=1.0)
+                    t_amt = st.number_input("סכום (חיובי מוסיף כסף, שלילי מוריד)", value=0.0, step=1.0)
                     t_note = st.text_input("סיבה")
-                    if st.form_submit_button("בצע עדכון", use_container_width=True):
+                    if st.form_submit_button("בצע עדכון"):
                         if t_amt != 0:
-                            # הפיכת הסימן כדי שיתרה חיובית תוסיף כסף בגיליון
-                            new_r = pd.DataFrame([{"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": t_user, "type": "adjustment", "amount": -t_amt, "status": "completed", "notes": t_note}])
-                            if safe_update("Transactions", pd.concat([trans_df, new_r], ignore_index=True)): st.rerun()
+                            db_add_transaction(t_user, "adjustment", -t_amt, notes=t_note)
 
+            # 4. טבלת יתרות כללית
             st.subheader("📊 טבלת יתרות")
             if not users_df.empty:
-                sums = []
+                all_balances = []
                 for _, u in users_df.iterrows():
                     bal, _ = calculate_balance(u['name'], trans_df)
-                    sums.append({"שם": u["name"], "יתרה": round(bal, 2)})
-                st.dataframe(pd.DataFrame(sums).sort_values("יתרה", ascending=False), use_container_width=True, hide_index=True)
+                    all_balances.append({"שם": u["name"], "יתרה (₪)": round(bal, 2)})
+                st.dataframe(pd.DataFrame(all_balances).sort_values("יתרה (₪)", ascending=False), use_container_width=True, hide_index=True)
