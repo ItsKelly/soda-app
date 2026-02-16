@@ -125,7 +125,6 @@ else:
 
         st.divider()
 
-        # שימוש בטופס למניעת ריענון בלחיצה על +
         with st.expander("🥤 רכישת סודה", expanded=True):
             with st.form("purchase_form", clear_on_submit=True):
                 qty = st.number_input("כמות", min_value=1, value=1, step=1)
@@ -157,6 +156,29 @@ else:
         with tabs[1]:
             st.markdown("<h3 class='centered-text'>ניהול מנהל</h3>", unsafe_allow_html=True)
             
+            # --- חדש: ניהול משתמשים ---
+            with st.expander("👥 הוספת משתמש חדש"):
+                with st.form("add_user_form", clear_on_submit=True):
+                    new_name = st.text_input("שם המשתמש")
+                    new_pin = st.text_input("קוד אישי (PIN)", placeholder="למשל 1234")
+                    new_role = st.selectbox("תפקיד", ["user", "admin"])
+                    if st.form_submit_button("הוסף משתמש למערכת", use_container_width=True):
+                        if new_name and new_pin:
+                            # בדיקה אם המשתמש כבר קיים
+                            if new_name in users_df["name"].values:
+                                st.error("משתמש בשם זה כבר קיים!")
+                            else:
+                                supabase.table("users").insert({
+                                    "name": new_name, "pin": new_pin, "role": new_role
+                                }).execute()
+                                st.success(f"המשתמש {new_name} נוסף בהצלחה!")
+                                st.cache_data.clear()
+                                st.rerun()
+                        else:
+                            st.warning("חובה למלא שם וקוד.")
+
+            st.divider()
+
             # אישור הפקדות
             pend_df = trans_df[trans_df["status"] == "pending"] if not trans_df.empty else pd.DataFrame()
             if not pend_df.empty:
@@ -199,6 +221,7 @@ else:
 
             st.divider()
 
+            # עדכון יתרה ידני
             with st.expander("🔄 עדכון יתרה ידני"):
                 with st.form("adj_form"):
                     t_user = st.selectbox("בחר משתמש", users_df["name"].tolist())
