@@ -5,7 +5,7 @@ from datetime import datetime
 import extra_streamlit_components as stx
 
 # --- 1. הגדרות עמוד ועיצוב RTL ---
-st.set_page_config(page_title="מועדון סודה", layout="centered", page_icon="🥤")
+st.set_page_config(page_title="שק\"מ אופוזיציה", layout="centered", page_icon="🥤")
 
 st.markdown("""
     <style>
@@ -86,13 +86,13 @@ if "user" not in st.session_state and not st.session_state.logout_in_progress:
             st.rerun()
 
 if "user" not in st.session_state:
-    st.markdown("<h1 class='centered-text'>🥤 מועדון סודה</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='centered-text'>🥤 שק\"מ אופוזיציה</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         with st.form("login_form"):
             u_list = users_df["name"].tolist() if not users_df.empty else []
-            l_name = st.selectbox("מי אתה?", u_list, index=None, placeholder="בחר שם...")
-            l_pin = st.text_input("קוד אישי", type="password")
+            l_name = st.selectbox("מי בשק\"מ?", u_list, index=None, placeholder="בחר שם...")
+            l_pin = st.text_input("קוד אישי (PIN)", type="password")
             if st.form_submit_button("כניסה", use_container_width=True):
                 if l_name:
                     u_m = users_df[users_df["name"] == l_name]
@@ -109,23 +109,23 @@ else:
     tabs = st.tabs(["👤 החשבון שלי", "🛠️ ניהול"]) if is_admin else [st.container()]
 
     with tabs[0]:
-        st.markdown(f"<h2 class='centered-text'>שלום, {user['name']}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='centered-text'>אהלן, {user['name']}</h2>", unsafe_allow_html=True)
         balance, pending = calculate_balance(user['name'], trans_df)
         color = "#28a745" if balance >= 0 else "#dc3545"
         
         st.markdown(f"""
             <div class="balance-box" style="color: {color}; border: 2px solid {color}; background-color: {color}10;">
-                יתרה בחשבון: ₪{balance:.2f}
+                יתרה בשק"מ: ₪{balance:.2f}
             </div>
             """, unsafe_allow_html=True)
         
         col_m1, col_m2 = st.columns(2)
-        col_m1.metric("מחיר בקבוק", f"₪{bottle_price}")
-        if pending > 0: col_m2.warning(f"ממתין לאישור: ₪{pending}")
+        col_m1.metric("מחיר פחית", f"₪{bottle_price}")
+        if pending > 0: col_m2.warning(f"ממתין לאישור הפקדה: ₪{pending}")
 
         st.divider()
 
-        with st.expander("🥤 רכישת סודה", expanded=True):
+        with st.expander("🥤 רכישה מהירה", expanded=True):
             with st.form("purchase_form", clear_on_submit=True):
                 qty = st.number_input("כמות", min_value=1, value=1, step=1)
                 if st.form_submit_button("אשר רכישה", type="primary"):
@@ -135,10 +135,10 @@ else:
                     st.cache_data.clear()
                     st.rerun()
         
-        with st.expander("💳 הפקדת כסף"):
+        with st.expander("💳 טעינת הארנק"):
             with st.form("pay_form", clear_on_submit=True):
-                p_amt = st.number_input("סכום (₪)", min_value=1.0, value=20.0, step=1.0)
-                if st.form_submit_button("שלח בקשה"):
+                p_amt = st.number_input("סכום לטעינה (₪)", min_value=1.0, value=20.0, step=1.0)
+                if st.form_submit_button("שלח בקשה למנהל"):
                     supabase.table("transactions").insert({
                         "name": user["name"], "type": "payment", "amount": p_amt, "status": "pending"
                     }).execute()
@@ -154,35 +154,31 @@ else:
 
     if is_admin:
         with tabs[1]:
-            st.markdown("<h3 class='centered-text'>ניהול מנהל</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 class='centered-text'>ניהול שק\"מ אופוזיציה</h3>", unsafe_allow_html=True)
             
-            # --- חדש: ניהול משתמשים ---
+            # ניהול משתמשים
             with st.expander("👥 הוספת משתמש חדש"):
                 with st.form("add_user_form", clear_on_submit=True):
-                    new_name = st.text_input("שם המשתמש")
-                    new_pin = st.text_input("קוד אישי (PIN)", placeholder="למשל 1234")
-                    new_role = st.selectbox("תפקיד", ["user", "admin"])
-                    if st.form_submit_button("הוסף משתמש למערכת", use_container_width=True):
+                    new_name = st.text_input("שם")
+                    new_pin = st.text_input("PIN (4 ספרות)")
+                    new_role = st.selectbox("הרשאה", ["user", "admin"])
+                    if st.form_submit_button("הוסף משתמש", use_container_width=True):
                         if new_name and new_pin:
-                            # בדיקה אם המשתמש כבר קיים
                             if new_name in users_df["name"].values:
-                                st.error("משתמש בשם זה כבר קיים!")
+                                st.error("השם כבר קיים במערכת.")
                             else:
                                 supabase.table("users").insert({
                                     "name": new_name, "pin": new_pin, "role": new_role
                                 }).execute()
-                                st.success(f"המשתמש {new_name} נוסף בהצלחה!")
                                 st.cache_data.clear()
                                 st.rerun()
-                        else:
-                            st.warning("חובה למלא שם וקוד.")
 
             st.divider()
 
             # אישור הפקדות
             pend_df = trans_df[trans_df["status"] == "pending"] if not trans_df.empty else pd.DataFrame()
             if not pend_df.empty:
-                st.subheader("💳 הפקדות לאישור")
+                st.subheader("💳 אישור טעינות")
                 for idx, row in pend_df.iterrows():
                     ca, cb = st.columns([3, 1])
                     ca.write(f"**{row['name']}**: ₪{row['amount']}")
@@ -194,6 +190,7 @@ else:
 
             st.divider()
 
+            # מלאי ומחיר
             col_a, col_b = st.columns(2)
             with col_a:
                 st.write("**📦 מלאי**")
@@ -203,17 +200,17 @@ else:
                 with st.popover("עדכן מלאי", use_container_width=True):
                     with st.form("inventory_form", clear_on_submit=True):
                         qc = st.number_input("שינוי (+/-)", value=0, step=1)
-                        if st.form_submit_button("בצע עדכון"):
+                        if st.form_submit_button("בצע"):
                             supabase.table("inventory").insert({"quantity": qc}).execute()
                             st.cache_data.clear()
                             st.rerun()
             
             with col_b:
-                st.write("**💰 הגדרות**")
-                st.metric("מחיר סודה", f"₪{bottle_price}")
+                st.write("**💰 מחיר**")
+                st.metric("נוכחי", f"₪{bottle_price}")
                 with st.popover("שנה מחיר", use_container_width=True):
                     with st.form("price_form"):
-                        np = st.number_input("מחיר חדש", value=bottle_price, step=0.5)
+                        np = st.number_input("חדש", value=bottle_price, step=0.5)
                         if st.form_submit_button("שמור"):
                             supabase.table("settings").update({"value": np}).eq("key", "bottle_price").execute()
                             st.cache_data.clear()
@@ -222,10 +219,10 @@ else:
             st.divider()
 
             # עדכון יתרה ידני
-            with st.expander("🔄 עדכון יתרה ידני"):
+            with st.expander("🔄 עדכון ידני / קנסות"):
                 with st.form("adj_form"):
                     t_user = st.selectbox("בחר משתמש", users_df["name"].tolist())
-                    t_amt = st.number_input("סכום להוספה (₪)", value=0.0, step=1.0)
+                    t_amt = st.number_input("סכום להוספה/הורדה (₪)", value=0.0, step=1.0)
                     t_note = st.text_input("סיבה")
                     if st.form_submit_button("בצע עדכון"):
                         if t_amt != 0:
@@ -235,10 +232,10 @@ else:
                             st.cache_data.clear()
                             st.rerun()
 
-            st.subheader("📊 טבלת יתרות")
+            st.subheader("📊 מצב חשבון כללי")
             if not users_df.empty:
                 sums = []
                 for _, u in users_df.iterrows():
                     bal, _ = calculate_balance(u['name'], trans_df)
-                    sums.append({"שם": u["name"], "יתרה (₪)": round(bal, 2)})
-                st.dataframe(pd.DataFrame(sums).sort_values("יתרה (₪)", ascending=False), use_container_width=True, hide_index=True)
+                    sums.append({"שם": u["name"], "יתרה": round(bal, 2)})
+                st.dataframe(pd.DataFrame(sums).sort_values("יתרה", ascending=False), use_container_width=True, hide_index=True)
