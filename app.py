@@ -48,7 +48,7 @@ def get_all_data():
         inv = supabase.table("inventory").select("*").execute().data
         settings = supabase.table("settings").select("*").execute().data
         
-        u_df = pd.DataFrame(users) if users else pd.DataFrame(columns=['name', 'pin', 'role'])
+        u_df = pd.DataFrame(users) if users else pd.DataFrame(columns=['name', 'pin', 'role', 'status'])
         t_df = pd.DataFrame(trans) if trans else pd.DataFrame(columns=['id', 'timestamp', 'name', 'type', 'amount', 'status', 'notes'])
         i_df = pd.DataFrame(inv) if inv else pd.DataFrame(columns=['timestamp', 'quantity'])
         
@@ -73,25 +73,28 @@ def calculate_balance(name, df):
     pending = u_t[(u_t["type"] == "payment") & (u_t["status"] == "pending")]["amount"].sum()
     return (payments - (purchases + adjustments)), pending
 
-# --- 4. כניסה למערכת ---
+# --- 4. לוגיקת כניסה ורישום ---
 if "logout_in_progress" not in st.session_state:
     st.session_state.logout_in_progress = False
 
 if "user" not in st.session_state and not st.session_state.logout_in_progress:
     saved_name = cookie_manager.get(cookie="soda_user_name")
     if saved_name and not users_df.empty:
-        u_match = users_df[users_df["name"] == saved_name]
+        u_match = users_df[(users_df["name"] == saved_name) & (users_df["status"] == "active")]
         if not u_match.empty:
             st.session_state.user = u_match.iloc[0].to_dict()
             st.rerun()
 
 if "user" not in st.session_state:
     st.markdown("<h1 class='centered-text'>🥤 שק\"מ אופוזיציה</h1>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
+    
+    login_tab, register_tab = st.tabs(["כניסה", "בקשת הצטרפות"])
+    
+    with login_tab:
         with st.form("login_form"):
-            u_list = users_df["name"].tolist() if not users_df.empty else []
-            l_name = st.selectbox("מי בשק\"מ?", u_list, index=None, placeholder="בחר שם...")
+            # רק משתמשים פעילים מופיעים ברשימת הכניסה
+            active_users = users_df[users_df["status"] == "active"]["name"].tolist() if not users_df.empty else []
+            l_name = st.selectbox("מי בשק\"מ?", active_users, index=None, placeholder="בחר שם...")
             l_pin = st.text_input("קוד אישי (PIN)", type="password")
             if st.form_submit_button("כניסה", use_container_width=True):
                 if l_name:
@@ -102,7 +105,25 @@ if "user" not in st.session_state:
                         cookie_manager.set("soda_user_name", l_name, expires_at=datetime.now().replace(year=2030))
                         st.cache_data.clear()
                         st.rerun()
-                    else: st.error("קוד שגוי.")
+                    else: st.error("קוד שגוי או משתמש לא פעיל.")
+
+    with register_tab:
+        st.info("מלאו את הפרטים והמנהל יאשר אתכם בהקדם.")
+        with st.form("register_form", clear_on_submit=True):
+            reg_name = st.text_input("שם מלא")
+            reg_pin = st.text_input("בחר קוד אישי (4 ספרות)")
+            if st.form_submit_button("שלח בקשת הצטרפות", use_container_width=True):
+                if reg_name and reg_pin:
+                    if reg_name in users_df["name"].values:
+                        st.error("השם כבר קיים במערכת (אולי אתה כבר רשום וממתין לאישור?)")
+                    else:
+                        supabase.table("users").insert({
+                            "name": reg_name, "pin": reg_pin, "role": "user", "status": "pending"
+                        }).execute()
+                        st.success("הבקשה נשלחה! פנה למנהל לאישור.")
+                else:
+                    st.warning("חובה למלא שם וקוד.")
+
 else:
     user = st.session_state.user
     is_admin = user.get('role') == 'admin'
@@ -137,7 +158,7 @@ else:
         
         with st.expander("💳 טעינת הארנק"):
             with st.form("pay_form", clear_on_submit=True):
-                p_amt = st.number_input("סכום לטעינה (₪)", min_value=1.0, value=20.0, step=1.0)
+                p_amt = st.number_input("סכום (₪)", min_value=1.0, value=20.0, step=1.0)
                 if st.form_submit_button("שלח בקשה למנהל"):
                     supabase.table("transactions").insert({
                         "name": user["name"], "type": "payment", "amount": p_amt, "status": "pending"
@@ -156,22 +177,19 @@ else:
         with tabs[1]:
             st.markdown("<h3 class='centered-text'>ניהול שק\"מ אופוזיציה</h3>", unsafe_allow_html=True)
             
-            # ניהול משתמשים
-            with st.expander("👥 הוספת משתמש חדש"):
-                with st.form("add_user_form", clear_on_submit=True):
-                    new_name = st.text_input("שם")
-                    new_pin = st.text_input("PIN (4 ספרות)")
-                    new_role = st.selectbox("הרשאה", ["user", "admin"])
-                    if st.form_submit_button("הוסף משתמש", use_container_width=True):
-                        if new_name and new_pin:
-                            if new_name in users_df["name"].values:
-                                st.error("השם כבר קיים במערכת.")
-                            else:
-                                supabase.table("users").insert({
-                                    "name": new_name, "pin": new_pin, "role": new_role
-                                }).execute()
-                                st.cache_data.clear()
-                                st.rerun()
+            # --- אישור משתמשים חדשים ---
+            st.subheader("👥 אישור חברים חדשים")
+            pending_users = users_df[users_df["status"] == "pending"] if not users_df.empty else pd.DataFrame()
+            if not pending_users.empty:
+                for idx, row in pending_users.iterrows():
+                    ca, cb = st.columns([3, 1])
+                    ca.write(f"**{row['name']}** מבקש להצטרף")
+                    if cb.button("אשר הצטרפות ✅", key=f"user_ap_{row['name']}"):
+                        supabase.table("users").update({"status": "active"}).eq("name", row['name']).execute()
+                        st.cache_data.clear()
+                        st.rerun()
+            else:
+                st.info("אין בקשות הצטרפות ממתינות.")
 
             st.divider()
 
@@ -182,7 +200,7 @@ else:
                 for idx, row in pend_df.iterrows():
                     ca, cb = st.columns([3, 1])
                     ca.write(f"**{row['name']}**: ₪{row['amount']}")
-                    if cb.button("אשר ✅", key=f"ap_{row['id']}"):
+                    if cb.button("אשר ✅", key=f"ap_{row['id']}", use_container_width=True):
                         supabase.table("transactions").update({"status": "completed"}).eq("id", row['id']).execute()
                         st.cache_data.clear()
                         st.rerun()
@@ -206,11 +224,11 @@ else:
                             st.rerun()
             
             with col_b:
-                st.write("**💰 מחיר**")
-                st.metric("נוכחי", f"₪{bottle_price}")
+                st.write("**💰 הגדרות**")
+                st.metric("מחיר פחית", f"₪{bottle_price}")
                 with st.popover("שנה מחיר", use_container_width=True):
                     with st.form("price_form"):
-                        np = st.number_input("חדש", value=bottle_price, step=0.5)
+                        np = st.number_input("מחיר חדש", value=bottle_price, step=0.5)
                         if st.form_submit_button("שמור"):
                             supabase.table("settings").update({"value": np}).eq("key", "bottle_price").execute()
                             st.cache_data.clear()
@@ -221,7 +239,8 @@ else:
             # עדכון יתרה ידני
             with st.expander("🔄 עדכון ידני / קנסות"):
                 with st.form("adj_form"):
-                    t_user = st.selectbox("בחר משתמש", users_df["name"].tolist())
+                    active_user_list = users_df[users_df["status"] == "active"]["name"].tolist()
+                    t_user = st.selectbox("בחר משתמש", active_user_list)
                     t_amt = st.number_input("סכום להוספה/הורדה (₪)", value=0.0, step=1.0)
                     t_note = st.text_input("סיבה")
                     if st.form_submit_button("בצע עדכון"):
@@ -234,8 +253,9 @@ else:
 
             st.subheader("📊 מצב חשבון כללי")
             if not users_df.empty:
+                active_users_data = users_df[users_df["status"] == "active"]
                 sums = []
-                for _, u in users_df.iterrows():
+                for _, u in active_users_data.iterrows():
                     bal, _ = calculate_balance(u['name'], trans_df)
                     sums.append({"שם": u["name"], "יתרה": round(bal, 2)})
                 st.dataframe(pd.DataFrame(sums).sort_values("יתרה", ascending=False), use_container_width=True, hide_index=True)
