@@ -22,15 +22,7 @@ st.markdown("""
         margin-bottom: 20px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
-    /* התאמת כפתורים */
     .stButton>button { width: 100%; border-radius: 10px; font-weight: bold; }
-    /* עיצוב טבלת הניהול */
-    .user-row {
-        padding: 10px;
-        border-bottom: 1px solid #eee;
-        display: flex;
-        align-items: center;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -79,6 +71,7 @@ def calculate_balance(name, df):
     purchases = u_t[u_t["type"] == "purchase"]["amount"].sum()
     payments = u_t[(u_t["type"] == "payment") & (u_t["status"] == "completed")]["amount"].sum()
     adjustments = u_t[u_t["type"] == "adjustment"]["amount"].sum()
+    # הנוסחה לחישוב היתרה: $Balance = Payments - (Purchases + Adjustments)$
     return (payments - (purchases + adjustments)), 0.0
 
 # --- 4. לוגיקת כניסה והתנתקות ---
@@ -209,12 +202,11 @@ else:
 
             st.divider()
             
-            # 3. ניהול יתרות ומשתמשים (לוח הבקרה החדש)
+            # 3. ניהול יתרות ומשתמשים (כולל התיקון לביטול הריענון)
             st.subheader("📊 ניהול יתרות ומשתמשים")
             if not users_df.empty:
                 active_u = users_df[users_df["status"] == "active"]
                 
-                # כותרות לטבלה הדינמית
                 h1, h2, h3 = st.columns([2, 1, 1])
                 h1.write("**שם המשתמש**")
                 h2.write("**יתרה**")
@@ -223,43 +215,39 @@ else:
                 for _, u in active_u.iterrows():
                     bal, _ = calculate_balance(u['name'], trans_df)
                     c1, c2, c3 = st.columns([2, 1, 1])
-                    
                     c1.write(f"**{u['name']}**")
                     b_color = "#28a745" if bal >= 0 else "#dc3545"
                     c2.markdown(f"<span style='color:{b_color}; font-weight:bold;'>₪{bal:.2f}</span>", unsafe_allow_html=True)
                     
-                    # פעולות בתוך פופאובר לכל משתמש
                     with c3.popover("ניהול", use_container_width=True):
                         st.write(f"עריכת חשבון: {u['name']}")
                         
-                        # הוספה/הורדה של כסף
+                        # טופס 1: עדכון יתרה
                         with st.form(key=f"adj_form_{u['name']}"):
-                            adj_amt = st.number_input("סכום לשינוי (חיובי מוסיף, שלילי מוריד)", value=0.0, step=1.0)
-                            adj_note = st.text_input("סיבה (אופציונלי)")
+                            adj_amt = st.number_input("סכום לשינוי (+/-)", value=0.0, step=1.0)
+                            adj_note = st.text_input("סיבה")
                             if st.form_submit_button("עדכן יתרה"):
                                 if adj_amt != 0:
-                                    # אנחנו שולחים את הערך ההפוך לטרנזקציות כי החישוב הוא: הפקדות פחות (קניות + התאמות)
                                     supabase.table("transactions").insert({
                                         "name": u["name"], "type": "adjustment", "amount": -adj_amt, "status": "completed", "notes": adj_note
                                     }).execute()
-                                    st.success(f"עודכן! {u['name']} קיבל ₪{adj_amt}")
                                     st.cache_data.clear()
                                     st.rerun()
                         
                         st.divider()
                         
-                        # מחיקת משתמש
+                        # טופס 2: מחיקה (זה מונע את הריענון בסימון ה-Checkbox)
                         st.write("🚨 אזור מסוכן")
-                        confirm_del = st.checkbox("אשר מחיקת המשתמש", key=f"del_conf_{u['name']}")
-                        if st.button(f"מחק את {u['name']}", type="secondary", key=f"del_btn_{u['name']}"):
-                            if confirm_del:
-                                # המחיקה מסירה את המשתמש מטבלת המשתמשים. הטרנזקציות שלו נשארות ב-DB לצרכי ארכיון אך הוא לא יופיע יותר.
-                                supabase.table("users").delete().eq("name", u["name"]).execute()
-                                st.success(f"המשתמש {u['name']} נמחק מהמערכת.")
-                                st.cache_data.clear()
-                                st.rerun()
-                            else:
-                                st.error("יש לסמן את תיבת האישור לפני המחיקה.")
+                        with st.form(key=f"del_form_{u['name']}"):
+                            confirm_del = st.checkbox("אשר מחיקת המשתמש")
+                            if st.form_submit_button(f"מחק את {u['name']}", type="secondary"):
+                                if confirm_del:
+                                    supabase.table("users").delete().eq("name", u["name"]).execute()
+                                    st.success(f"המשתמש {u['name']} נמחק.")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.error("חובה לסמן את תיבת האישור.")
 
             st.divider()
 
@@ -272,7 +260,7 @@ else:
                 with st.popover("עדכן מלאי"):
                     with st.form("inv_f", clear_on_submit=True):
                         qc = st.number_input("שינוי", value=0, step=1)
-                        if st.form_submit_button("בצע"):
+                        if st.form_submit_button("עדכן"):
                             supabase.table("inventory").insert({"quantity": qc}).execute()
                             st.cache_data.clear()
                             st.rerun()
